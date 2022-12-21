@@ -108,31 +108,30 @@ impl Field {
     }
 
     pub fn encode(&self, ident: TokenStream) -> TokenStream {
-        let module = self.ty.module();
-        let encode_fn = match self.kind {
-            Kind::Plain(..) | Kind::Optional(..) | Kind::Required(..) => quote!(encode),
-            Kind::Repeated => quote!(encode_repeated),
-            Kind::Packed => quote!(encode_packed),
-        };
-        let encode_fn = quote!(::prost::encoding::#module::#encode_fn);
+        let proto_type = self.ty.prost_type();
         let tag = self.tag;
 
-        match self.kind {
+        match &self.kind {
             Kind::Plain(ref default) => {
                 let default = default.typed();
                 quote! {
                     if #ident != #default {
-                        #encode_fn(#tag, &#ident, buf);
+                        <::prost::encoding_traits::Plain as ::prost::encoding_traits::Mode>::encode::<#proto_type,_,_>(#tag, &#ident, buf);
                     }
                 }
             }
             Kind::Optional(..) => quote! {
-                if let ::core::option::Option::Some(ref value) = #ident {
-                    #encode_fn(#tag, value, buf);
-                }
+                <::prost::encoding_traits::Optional as ::prost::encoding_traits::Mode>::encode::<#proto_type,_,_>(#tag, &#ident, buf);
             },
-            Kind::Required(..) | Kind::Repeated | Kind::Packed => quote! {
-                #encode_fn(#tag, &#ident, buf);
+            Kind::Repeated => quote! {
+                <::prost::encoding_traits::Repeated as ::prost::encoding_traits::Mode>::encode::<#proto_type,_,_>(#tag, &#ident, buf);
+            },
+            Kind::Packed => quote! {
+
+                <::prost::encoding_traits::Packed as ::prost::encoding_traits::Mode>::encode::<#proto_type,_,_>(#tag, &#ident, buf);
+            },
+            Kind::Required(r) => quote! {
+                <::prost::encoding_traits::Required as ::prost::encoding_traits::Mode>::encode::<#proto_type,_,_>(#tag, &#ident, buf);
             },
         }
     }
@@ -140,22 +139,23 @@ impl Field {
     /// Returns an expression which evaluates to the result of merging a decoded
     /// scalar value into the field.
     pub fn merge(&self, ident: TokenStream) -> TokenStream {
-        let module = self.ty.module();
-        let merge_fn = match self.kind {
-            Kind::Plain(..) | Kind::Optional(..) | Kind::Required(..) => quote!(merge),
-            Kind::Repeated | Kind::Packed => quote!(merge_repeated),
-        };
-        let merge_fn = quote!(::prost::encoding::#module::#merge_fn);
+        let proto_type = self.ty.prost_type();
 
-        match self.kind {
-            Kind::Plain(..) | Kind::Required(..) | Kind::Repeated | Kind::Packed => quote! {
-                #merge_fn(wire_type, #ident, buf, ctx)
+        match &self.kind {
+            Kind::Plain(ref default) => quote! {
+                <::prost::encoding_traits::Plain as ::prost::encoding_traits::Mode>::merge::<#proto_type,_,_>(wire_type, #ident, buf, ctx)
             },
             Kind::Optional(..) => quote! {
-                #merge_fn(wire_type,
-                          #ident.get_or_insert_with(::core::default::Default::default),
-                          buf,
-                          ctx)
+                <::prost::encoding_traits::Optional as ::prost::encoding_traits::Mode>::merge::<#proto_type,_,_>(wire_type, #ident, buf, ctx)
+            },
+            Kind::Repeated => quote! {
+                <::prost::encoding_traits::Repeated as ::prost::encoding_traits::Mode>::merge::<#proto_type,_,_>(wire_type, #ident, buf, ctx)
+            },
+            Kind::Packed => quote! {
+                <::prost::encoding_traits::Packed as ::prost::encoding_traits::Mode>::merge::<#proto_type,_,_>(wire_type, #ident, buf, ctx)
+            },
+            Kind::Required(r) => quote! {
+                <::prost::encoding_traits::Required as ::prost::encoding_traits::Mode>::merge::<#proto_type,_,_>(wire_type, #ident, buf, ctx)
             },
         }
     }
@@ -555,6 +555,27 @@ impl Ty {
             Ty::String => quote!(&str),
             Ty::Bytes(..) => quote!(&[u8]),
             Ty::Enumeration(..) => quote!(i32),
+        }
+    }
+    pub fn prost_type(&self) -> TokenStream {
+        match *self {
+            Ty::Double => quote!(::prost::encoding_traits::ProtobufDouble),
+            Ty::Float => quote!(::prost::encoding_traits::ProtobufFloat),
+            Ty::Int32 => quote!(::prost::encoding_traits::Int32),
+            Ty::Int64 => quote!(::prost::encoding_traits::Int64),
+            Ty::Uint32 => quote!(::prost::encoding_traits::Uint32),
+            Ty::Uint64 => quote!(::prost::encoding_traits::Uint64),
+            Ty::Sint32 => quote!(::prost::encoding_traits::Sint32),
+            Ty::Sint64 => quote!(::prost::encoding_traits::Sint64),
+            Ty::Fixed32 => quote!(::prost::encoding_traits::Fixed32),
+            Ty::Fixed64 => quote!(::prost::encoding_traits::Fixed64),
+            Ty::Sfixed32 => quote!(::prost::encoding_traits::SFixed32),
+            Ty::Sfixed64 => quote!(::prost::encoding_traits::SFixed64),
+            Ty::Bool => quote!(::prost::encoding_traits::ProtobufBool),
+            Ty::String => quote!(::prost::encoding_traits::ProtobufString),
+            Ty::Bytes(BytesTy::Bytes) => quote!(::prost::encoding_traits::ProtobufBytes),
+            Ty::Bytes(BytesTy::Vec) => quote!(::prost::encoding_traits::ProtobufBytes),
+            Ty::Enumeration(..) => quote!(::prost::encoding_traits::ProtobufEnum),
         }
     }
 

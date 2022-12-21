@@ -9,12 +9,12 @@ pub extern crate alloc;
 // Re-export the bytes crate for use within derived code.
 pub use bytes;
 
+#[doc(hidden)]
+pub mod encoding;
+pub mod encoding_traits;
 mod error;
 mod message;
 mod types;
-
-#[doc(hidden)]
-pub mod encoding;
 
 pub use crate::error::{DecodeError, EncodeError};
 pub use crate::message::Message;
