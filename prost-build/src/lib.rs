@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/prost-build/0.11.2")]
+#![doc(html_root_url = "https://docs.rs/prost-build/0.11.5")]
 #![allow(clippy::option_as_ref_deref, clippy::format_push_string)]
 
 //! `prost-build` compiles `.proto` files into Rust.
@@ -138,6 +138,7 @@ use std::ops::RangeToInclusive;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use log::debug;
 use log::trace;
 
 use prost::Message;
@@ -243,6 +244,8 @@ pub struct Config {
     map_type: PathMap<MapType>,
     bytes_type: PathMap<BytesType>,
     type_attributes: PathMap<String>,
+    message_attributes: PathMap<String>,
+    enum_attributes: PathMap<String>,
     field_attributes: PathMap<String>,
     prost_types: bool,
     strip_enum_prefix: bool,
@@ -467,6 +470,94 @@ impl Config {
         self
     }
 
+    /// Add additional attribute to matched messages.
+    ///
+    /// # Arguments
+    ///
+    /// **`paths`** - a path matching any number of types. It works the same way as in
+    /// [`btree_map`](#method.btree_map), just with the field name omitted.
+    ///
+    /// **`attribute`** - an arbitrary string to be placed before each matched type. The
+    /// expected usage are additional attributes, but anything is allowed.
+    ///
+    /// The calls to this method are cumulative. They don't overwrite previous calls and if a
+    /// type is matched by multiple calls of the method, all relevant attributes are added to
+    /// it.
+    ///
+    /// For things like serde it might be needed to combine with [field
+    /// attributes](#method.field_attribute).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # let mut config = prost_build::Config::new();
+    /// // Nothing around uses floats, so we can derive real `Eq` in addition to `PartialEq`.
+    /// config.message_attribute(".", "#[derive(Eq)]");
+    /// // Some messages want to be serializable with serde as well.
+    /// config.message_attribute("my_messages.MyMessageType",
+    ///                       "#[derive(Serialize)] #[serde(rename_all = \"snake_case\")]");
+    /// config.message_attribute("my_messages.MyMessageType.MyNestedMessageType",
+    ///                       "#[derive(Serialize)] #[serde(rename_all = \"snake_case\")]");
+    /// ```
+    pub fn message_attribute<P, A>(&mut self, path: P, attribute: A) -> &mut Self
+    where
+        P: AsRef<str>,
+        A: AsRef<str>,
+    {
+        self.message_attributes
+            .insert(path.as_ref().to_string(), attribute.as_ref().to_string());
+        self
+    }
+
+    /// Add additional attribute to matched enums and one-ofs.
+    ///
+    /// # Arguments
+    ///
+    /// **`paths`** - a path matching any number of types. It works the same way as in
+    /// [`btree_map`](#method.btree_map), just with the field name omitted.
+    ///
+    /// **`attribute`** - an arbitrary string to be placed before each matched type. The
+    /// expected usage are additional attributes, but anything is allowed.
+    ///
+    /// The calls to this method are cumulative. They don't overwrite previous calls and if a
+    /// type is matched by multiple calls of the method, all relevant attributes are added to
+    /// it.
+    ///
+    /// For things like serde it might be needed to combine with [field
+    /// attributes](#method.field_attribute).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # let mut config = prost_build::Config::new();
+    /// // Nothing around uses floats, so we can derive real `Eq` in addition to `PartialEq`.
+    /// config.enum_attribute(".", "#[derive(Eq)]");
+    /// // Some messages want to be serializable with serde as well.
+    /// config.enum_attribute("my_messages.MyEnumType",
+    ///                       "#[derive(Serialize)] #[serde(rename_all = \"snake_case\")]");
+    /// config.enum_attribute("my_messages.MyMessageType.MyNestedEnumType",
+    ///                       "#[derive(Serialize)] #[serde(rename_all = \"snake_case\")]");
+    /// ```
+    ///
+    /// # Oneof fields
+    ///
+    /// The `oneof` fields don't have a type name of their own inside Protobuf. Therefore, the
+    /// field name can be used both with `enum_attribute` and `field_attribute` ‒ the first is
+    /// placed before the `enum` type definition, the other before the field inside corresponding
+    /// message `struct`.
+    ///
+    /// In other words, to place an attribute on the `enum` implementing the `oneof`, the match
+    /// would look like `my_messages.MyNestedMessageType.oneofname`.
+    pub fn enum_attribute<P, A>(&mut self, path: P, attribute: A) -> &mut Self
+    where
+        P: AsRef<str>,
+        A: AsRef<str>,
+    {
+        self.enum_attributes
+            .insert(path.as_ref().to_string(), attribute.as_ref().to_string());
+        self
+    }
+
     /// Configures the code generator to use the provided service generator.
     pub fn service_generator(&mut self, service_generator: Box<dyn ServiceGenerator>) -> &mut Self {
         self.service_generator = Some(service_generator);
@@ -663,8 +754,7 @@ impl Config {
 
     /// In combination with with `file_descriptor_set_path`, this can be used to provide a file
     /// descriptor set as an input file, rather than having prost-build generate the file by calling
-    /// protoc.  Prost-build does require that the descriptor set was generated with
-    /// --include_source_info.
+    /// protoc.
     ///
     /// In `build.rs`:
     ///
@@ -857,7 +947,7 @@ impl Config {
                 if include.as_ref().exists() {
                     cmd.arg("-I").arg(include.as_ref());
                 } else {
-                    println!(
+                    debug!(
                         "ignoring {} since it does not exist.",
                         include.as_ref().display()
                     )
@@ -878,7 +968,7 @@ impl Config {
                 cmd.arg(proto.as_ref());
             }
 
-            println!("Running: {:?}", cmd);
+            debug!("Running: {:?}", cmd);
 
             let output = cmd.output().map_err(|error| {
                 Error::new(
@@ -1080,8 +1170,8 @@ impl Config {
 
     #[cfg(feature = "format")]
     fn fmt_modules(&mut self, modules: &mut HashMap<Module, String>) {
-        for (_, buf) in modules {
-            let file = syn::parse_file(&buf).unwrap();
+        for buf in modules.values_mut() {
+            let file = syn::parse_file(buf).unwrap();
             let formatted = prettyplease::unparse(&file);
             *buf = formatted;
         }
@@ -1099,6 +1189,8 @@ impl default::Default for Config {
             map_type: PathMap::default(),
             bytes_type: PathMap::default(),
             type_attributes: PathMap::default(),
+            message_attributes: PathMap::default(),
+            enum_attributes: PathMap::default(),
             field_attributes: PathMap::default(),
             prost_types: true,
             strip_enum_prefix: true,
@@ -1272,7 +1364,7 @@ pub fn protoc_from_env() -> PathBuf {
     let os_specific_hint = if cfg!(target_os = "macos") {
         "You could try running `brew install protobuf` or downloading it from https://github.com/protocolbuffers/protobuf/releases"
     } else if cfg!(target_os = "linux") {
-        "If you're on debian, try `apt-get install protobuf3-compiler` or download it from https://github.com/protocolbuffers/protobuf/releases"
+        "If you're on debian, try `apt-get install protobuf-compiler` or download it from https://github.com/protocolbuffers/protobuf/releases"
     } else {
         "You can download it from https://github.com/protocolbuffers/protobuf/releases or from your package manager."
     };
@@ -1426,6 +1518,37 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_message_attributes() {
+        let _ = env_logger::try_init();
+
+        let out_dir = std::env::temp_dir();
+
+        Config::new()
+            .out_dir(out_dir.clone())
+            .message_attribute(".", "#[derive(derive_builder::Builder)]")
+            .enum_attribute(".", "#[some_enum_attr(u8)]")
+            .compile_protos(
+                &["src/fixtures/helloworld/hello.proto"],
+                &["src/fixtures/helloworld"],
+            )
+            .unwrap();
+
+        let out_file = out_dir
+            .join("helloworld.rs")
+            .as_path()
+            .display()
+            .to_string();
+        let expected_content = read_all_content("src/fixtures/helloworld/_expected_helloworld.rs")
+            .replace("\r\n", "\n");
+        let content = read_all_content(&out_file).replace("\r\n", "\n");
+        assert_eq!(
+            expected_content, content,
+            "Unexpected content: \n{}",
+            content
+        );
+    }
+
+    #[test]
     fn test_generate_no_empty_outputs() {
         let _ = env_logger::try_init();
         let state = Rc::new(RefCell::new(MockState::default()));
@@ -1522,6 +1645,6 @@ mod tests {
         let mut f = File::open(filepath).unwrap();
         let mut content = String::new();
         f.read_to_string(&mut content).unwrap();
-        return content;
+        content
     }
 }
